@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PharmaTrack — Drug Inventory & Supply Chain Dashboard</title>
+
+  <!-- Tailwind Play CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Tailwind config for colors and dark mode class strategy
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: '#0ea5a4',
+            danger: '#ef4444',
+            warn: '#f59e0b',
+            success: '#10b981',
+            card: '#0f172a'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Heroicons CDN (for icons) -->
+  <link href="https://unpkg.com/@heroicons/vue@2.0.16/dist/heroicons.css" rel="stylesheet">
+
+  <style>
+    /* small overrides for the layout and map height */
+    html,body,#app { height: 100%; }
+    #map { height: 320px; border-radius: .5rem; }
+    .timeline-step { border-left: 3px solid rgba(148,163,184,0.2); padding-left: 1rem; margin-left: 0.5rem; }
+    .heat-cell { width: 60px; height: 40px; border-radius: 6px; display:flex; align-items:center; justify-content:center; }
+    /* simple scrollbar */
+    ::-webkit-scrollbar { height: 10px; width: 10px; }
+    ::-webkit-scrollbar-thumb { background: rgba(100,116,139,0.4); border-radius: 10px; }
+  </style>
+</head>
+<body class="antialiased bg-slate-50 text-slate-800" >
+  <div id="app" class="min-h-screen flex flex-col">
+
+    <!-- HEADER / TOP BAR -->
+    <header class="flex items-center justify-between px-4 py-3 bg-white shadow-sm sticky top-0 z-20">
+      <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2">
+          <div class="w-10 h-10 rounded-md bg-primary text-white flex items-center justify-center font-bold">PT</div>
+          <div>
+            <div class="font-semibold">PharmaTrack</div>
+            <div class="text-xs text-slate-500">Inventory & Supply Chain</div>
+          </div>
+        </div>
+        <div class="ml-6">
+          <input id="globalSearch" type="search" placeholder="Search drug name, ID, batch..." class="px-3 py-2 rounded-md border bg-slate-50 focus:outline-none" />
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <button id="toggleDark" title="Toggle dark mode" class="p-2 rounded-md hover:bg-slate-100" aria-label="Toggle dark mode">🌙</button>
+
+        <div class="relative">
+          <button id="notifBtn" class="p-2 rounded-md hover:bg-slate-100" aria-label="Notifications">🔔 <span id="notifCount" class="ml-1 text-xs bg-danger text-white rounded-full px-1">3</span></button>
+          <div id="notifPanel" class="hidden absolute right-0 mt-2 w-96 bg-white shadow-lg rounded-md overflow-hidden">
+            <div class="px-4 py-2 font-semibold border-b">Notifications</div>
+            <div id="notifList" class="max-h-60 overflow-auto"></div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <img src="https://i.pravatar.cc/40" alt="User" class="rounded-full" />
+          <div class="text-sm">
+            <div class="font-medium">Admin</div>
+            <div class="text-xs text-slate-500">Pharmacy Manager</div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="flex flex-1">
+      <!-- SIDEBAR -->
+      <aside class="w-64 bg-white border-r hidden md:block">
+        <nav class="p-4">
+          <ul class="space-y-1">
+            <li><button class="nav-link w-full text-left p-2 rounded-md flex items-center gap-3 text-slate-700" data-page="overview">🏠 Dashboard Overview</button></li>
+            <li><button class="nav-link w-full text-left p-2 rounded-md flex items-center gap-3 text-slate-700" data-page="inventory">📦 Inventory</button></li>
+            <li><button class="nav-link w-full text-left p-2 rounded-md flex items-center gap-3 text-slate-700" data-page="supply">🚚 Supply Chain / Shipments</button></li>
+            <li><button class="nav-link w-full text-left p-2 rounded-md flex items-center gap-3 text-slate-700" data-page="suppliers">🤝 Suppliers & Distributors</button></li>
+            <li><button class="nav-link w-full text-left p-2 rounded-md flex items-center gap-3 text-slate-700" data-page="analytics">📈 Analytics / Reports</button></li>
+            <li><button class="nav-link w-full text-left p-2 rounded-md flex items-center gap-3 text-slate-700" data-page="alerts">⚠️ Alerts & Compliance</button></li>
+            <li><button class="nav-link w-full text-left p-2 rounded-md flex items-center gap-3 text-slate-700" data-page="settings">⚙️ Settings</button></li>
+          </ul>
+        </nav>
+      </aside>
+
+      <!-- MAIN CONTENT -->
+      <main class="flex-1 p-6 overflow-auto">
+        <!-- PAGES: We'll hide/show via JS -->
+        <!-- DASHBOARD OVERVIEW -->
+        <section id="page-overview" class="space-y-6">
+          <h2 class="text-2xl font-semibold">Dashboard Overview</h2>
+
+          <!-- KPI Cards -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="p-4 rounded-lg bg-white shadow-sm">
+              <div class="text-sm text-slate-500">Total Stock Value</div>
+              <div id="kpi-stock-value" class="text-2xl font-bold mt-2">₹ 2,340,500</div>
+              <div class="text-xs text-slate-400 mt-1">Updated just now</div>
+            </div>
+            <div class="p-4 rounded-lg bg-white shadow-sm">
+              <div class="text-sm text-slate-500">Drugs Running Low</div>
+              <div id="kpi-low" class="text-2xl font-bold mt-2">13</div>
+              <div class="text-xs text-slate-400 mt-1">Threshold: 20 units</div>
+            </div>
+            <div class="p-4 rounded-lg bg-white shadow-sm">
+              <div class="text-sm text-slate-500">Shipments In Transit</div>
+              <div id="kpi-intransit" class="text-2xl font-bold mt-2">5</div>
+              <div class="text-xs text-slate-400 mt-1">From 3 suppliers</div>
+            </div>
+            <div class="p-4 rounded-lg bg-white shadow-sm">
+              <div class="text-sm text-slate-500">Expiring Soon</div>
+              <div id="kpi-expiring" class="text-2xl font-bold mt-2">7</div>
+              <div class="text-xs text-slate-400 mt-1">Within 60 days</div>
+            </div>
+          </div>
+
+          <!-- Charts + Alerts -->
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="col-span-2 p-4 bg-white rounded-lg shadow-sm">
+              <div class="flex items-center justify-between mb-3">
+                <div class="font-semibold">Top 10 Drugs by Quantity</div>
+                <div class="text-xs text-slate-400">Units in stock</div>
+              </div>
+              <canvas id="barChart" height="180"></canvas>
+            </div>
+
+            <div class="p-4 bg-white rounded-lg shadow-sm">
+              <div class="flex items-center justify-between mb-3">
+                <div class="font-semibold">Alerts</div>
+                <div class="text-xs text-slate-400">Critical & Warnings</div>
+              </div>
+              <div id="alertsPanel" class="space-y-3 max-h-64 overflow-auto">
+                <!-- filled by JS -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Map + Timeline -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="p-4 bg-white rounded-lg shadow-sm">
+              <div class="flex items-center justify-between mb-3">
+                <div class="font-semibold">Supply Chain Map</div>
+                <div class="text-xs text-slate-400">Shipments in progress</div>
+              </div>
+              <div id="map"></div>
+            </div>
+
+            <div class="p-4 bg-white rounded-lg shadow-sm">
+              <div class="mb-3 font-semibold">Shipments Timeline</div>
+              <div id="timelineList" class="space-y-4 max-h-80 overflow-auto">
+                <!-- timeline items -->
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- INVENTORY PAGE -->
+        <section id="page-inventory" class="hidden space-y-6">
+          <div class="flex items-center justify-between">
+            <h2 class="text-2xl font-semibold">Inventory Management</h2>
+            <div class="flex items-center gap-3">
+              <select id="categoryFilter" class="px-3 py-2 rounded-md border bg-white">
+                <option value="">All categories</option>
+              </select>
+              <button id="exportCsv" class="px-3 py-2 bg-primary text-white rounded-md">Export CSV</button>
+            </div>
+          </div>
+
+          <div class="bg-white p-4 rounded-lg shadow-sm">
+            <div class="mb-3 text-sm text-slate-500">Search / Filter table</div>
+            <div class="overflow-auto">
+              <table id="inventoryTable" class="min-w-full divide-y">
+                <thead class="bg-slate-50 sticky top-0">
+                  <tr class="text-left text-xs text-slate-500">
+                    <th class="p-2 cursor-pointer" data-key="drug">Drug</th>
+                    <th class="p-2 cursor-pointer" data-key="batch">Batch ID</th>
+                    <th class="p-2 cursor-pointer" data-key="qty">Qty</th>
+                    <th class="p-2 cursor-pointer" data-key="expiry">Expiry</th>
+                    <th class="p-2 cursor-pointer" data-key="location">Location</th>
+                    <th class="p-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="inventoryBody" class="bg-white divide-y">
+                  <!-- populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- SUPPLY CHAIN / SHIPMENTS PAGE -->
+        <section id="page-supply" class="hidden space-y-6">
+          <h2 class="text-2xl font-semibold">Supply Chain / Shipments</h2>
+
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="col-span-2 bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold mb-2">Live Shipments Map</div>
+              <div id="mapSmall" style="height:300px;"></div>
+            </div>
+
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold mb-2">Performance</div>
+              <div class="text-sm text-slate-500 mb-3">Supplier & distributor reliability</div>
+              <canvas id="supplierChart" height="200"></canvas>
+            </div>
+          </div>
+
+          <div class="bg-white p-4 rounded-lg shadow-sm">
+            <div class="font-semibold mb-2">Shipments List</div>
+            <div id="shipmentsList" class="space-y-3 max-h-60 overflow-auto"></div>
+          </div>
+        </section>
+
+        <!-- SUPPLIERS PAGE -->
+        <section id="page-suppliers" class="hidden space-y-6">
+          <h2 class="text-2xl font-semibold">Suppliers & Distributors</h2>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold">Top Suppliers</div>
+              <ul id="suppliersList" class="mt-3 space-y-2"></ul>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow-sm col-span-2">
+              <div class="font-semibold mb-2">Supplier Details</div>
+              <div id="supplierDetail" class="text-sm text-slate-600">Select a supplier to view metrics.</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ANALYTICS / REPORTS PAGE -->
+        <section id="page-analytics" class="hidden space-y-6">
+          <h2 class="text-2xl font-semibold">Analytics & Reports</h2>
+
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold mb-2">Drug Usage Trend</div>
+              <canvas id="usageChart" height="200"></canvas>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold mb-2">Expiry Rate</div>
+              <div id="expiryRate" class="text-4xl font-bold">4.2%</div>
+              <div class="text-sm text-slate-500 mt-2">Proportion of stock expiring within 90 days.</div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold mb-2">Demand Heatmap (regions)</div>
+              <div class="grid grid-cols-4 gap-2" id="heatmapGrid">
+                <!-- simple cells -->
+              </div>
+            </div>
+
+            <div class="bg-white p-4 rounded-lg shadow-sm col-span-2">
+              <div class="font-semibold mb-2">Supplier Reliability</div>
+              <canvas id="reliabilityChart" height="180"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- ALERTS & COMPLIANCE PAGE -->
+        <section id="page-alerts" class="hidden space-y-6">
+          <h2 class="text-2xl font-semibold">Alerts & Compliance</h2>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold">Expiry Alerts</div>
+              <ul id="expiryList" class="mt-3 space-y-2 text-sm"></ul>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold">Temperature Breaches</div>
+              <ul id="tempList" class="mt-3 space-y-2 text-sm"></ul>
+            </div>
+            <div class="bg-white p-4 rounded-lg shadow-sm">
+              <div class="font-semibold">Compliance Checks</div>
+              <ul id="complianceList" class="mt-3 space-y-2 text-sm"></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- SETTINGS PAGE -->
+        <section id="page-settings" class="hidden space-y-6">
+          <h2 class="text-2xl font-semibold">Settings</h2>
+          <div class="bg-white p-4 rounded-lg shadow-sm">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="font-semibold">Low-stock threshold</div>
+                <div class="text-sm text-slate-500">Adjust when an item is flagged as 'low'</div>
+              </div>
+              <input id="thresholdInput" type="number" value="20" min="1" class="px-3 py-2 border rounded-md w-24" />
+            </div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- Minimal inline documentation for developers -->
+  <!-- Main script: loads mock data, initializes charts, map, table interactivity -->
+  <script>
+    /* Essential: mock data for demo */
+    const MOCK_DRUGS = [
+      { drug: 'Amoxicillin', batch: 'AMX-2025-001', qty: 420, expiry: '2026-04-10', category: 'Antibiotic', location: 'Warehouse A' },
+      { drug: 'Paracetamol', batch: 'PCM-2024-221', qty: 1200, expiry: '2027-09-15', category: 'Analgesic', location: 'Warehouse B' },
+      { drug: 'Insulin', batch: 'INS-2024-777', qty: 80, expiry: '2025-11-01', category: 'Hormone', location: 'Cold Storage' },
+      { drug: 'Azithromycin', batch: 'AZT-2024-089', qty: 150, expiry: '2026-01-22', category: 'Antibiotic', location: 'Warehouse C' },
+      { drug: 'Vaccine-C', batch: 'VAC-2023-44', qty: 30, expiry: '2025-10-10', category: 'Vaccine', location: 'Cold Storage' },
+      { drug: 'Metformin', batch: 'MET-2022-900', qty: 540, expiry: '2028-02-18', category: 'Antidiabetic', location: 'Warehouse A' },
+      { drug: 'Cefixime', batch: 'CFX-2024-333', qty: 55, expiry: '2025-12-05', category: 'Antibiotic', location: 'Warehouse B' },
+      { drug: 'Omeprazole', batch: 'OMP-2024-101', qty: 980, expiry: '2027-05-02', category: 'Gastro', location: 'Warehouse A' },
+      { drug: 'Atorvastatin', batch: 'ATR-2023-999', qty: 200, expiry: '2026-07-12', category: 'Cardiac', location: 'Warehouse C' },
+      { drug: 'Salbutamol', batch: 'SLB-2025-010', qty: 68, expiry: '2025-10-02', category: 'Respiratory', location: 'Warehouse B' },
+      { drug: 'Penicillin', batch: 'PEN-2023-555', qty: 18, expiry: '2025-09-30', category: 'Antibiotic', location: 'Warehouse C' }
+    ];
+
+    const MOCK_SHIPMENTS = [
+      { id: 'SHP-001', origin: 'Supplier A', dest: 'Warehouse A', status: 'in-transit', lat: 28.7041, lon: 77.1025, eta: '2025-09-27', delay: 0 },
+      { id: 'SHP-002', origin: 'Supplier B', dest: 'Warehouse B', status: 'dispatched', lat: 19.0760, lon: 72.8777, eta: '2025-09-29', delay: 2 },
+      { id: 'SHP-003', origin: 'Supplier C', dest: 'Warehouse C', status: 'delivered', lat: 13.0827, lon: 80.2707, eta: '2025-09-24', delay: 0 },
+      { id: 'SHP-004', origin: 'Supplier D', dest: 'Cold Storage', status: 'in-transit', lat: 22.5726, lon: 88.3639, eta: '2025-09-28', delay: 1 },
+      { id: 'SHP-005', origin: 'Supplier E', dest: 'Warehouse B', status: 'ordered', lat: 12.9716, lon: 77.5946, eta: '2025-10-02', delay: 0 }
+    ];
+
+    const MOCK_SUPPLIERS = [
+      { name: 'Supplier A', reliability: 95 },
+      { name: 'Supplier B', reliability: 88 },
+      { name: 'Supplier C', reliability: 92 },
+      { name: 'Supplier D', reliability: 78 },
+      { name: 'Supplier E', reliability: 85 }
+    ];
+
+    const LOW_THRESHOLD_DEFAULT = 20;
+    let lowThreshold = LOW_THRESHOLD_DEFAULT;
+
+    /* Utility: date helpers */
+    function daysUntil(dateStr) {
+      const d = new Date(dateStr);
+      const now = new Date();
+      return Math.ceil((d - now) / (1000*60*60*24));
+    }
+
+    /* Sidebar nav controls */
+    document.querySelectorAll('.nav-link').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        document.querySelectorAll('section[id^="page-"]').forEach(s=>s.classList.add('hidden'));
+        const page = 'page-' + btn.dataset.page;
+        document.getElementById(page).classList.remove('hidden');
+      });
+    });
+
+    // default show overview
+    document.getElementById('page-overview').classList.remove('hidden');
+
+    /* Dark mode toggle */
+    document.getElementById('toggleDark').addEventListener('click', ()=>{
+      document.documentElement.classList.toggle('dark');
+      document.body.classList.toggle('bg-slate-900');
+      document.body.classList.toggle('text-slate-100');
+    });
+
+    /* Notifications panel */
+    const notifBtn = document.getElementById('notifBtn');
+    const notifPanel = document.getElementById('notifPanel');
+    notifBtn.addEventListener('click', ()=> notifPanel.classList.toggle('hidden'));
+
+    /* Fill notifications */
+    const NOTIFS = [
+      { type: 'low', text: 'Penicillin (PEN-2023-555) below threshold (18 units)' },
+      { type: 'expiry', text: 'Vaccine-C (VAC-2023-44) expiring in 15 days' },
+      { type: 'delay', text: 'SHP-002 delayed by 2 days' },
+    ];
+    const notifList = document.getElementById('notifList');
+    NOTIFS.forEach(n=>{
+      const el = document.createElement('div');
+      el.className = 'px-4 py-3 hover:bg-slate-50';
+      el.innerHTML = `<div class="text-sm">${n.text}</div><div class="text-xs text-slate-400">${n.type.toUpperCase()}</div>`;
+      notifList.appendChild(el);
+    });
+
+    /* Alerts panel content */
+    function renderAlerts() {
+      const panel = document.getElementById('alertsPanel');
+      panel.innerHTML = '';
+      const alerts = [];
+      // low stock alerts
+      MOCK_DRUGS.forEach(d=>{
+        if (d.qty <= lowThreshold) alerts.push({ level: 'critical', text: `${d.drug} (${d.batch}) low: ${d.qty} units` });
+        else if (d.qty <= lowThreshold * 1.5) alerts.push({ level: 'warn', text: `${d.drug} (${d.batch}) approaching low: ${d.qty} units` });
+      });
+      // expiry alerts
+      MOCK_DRUGS.forEach(d=>{
+        const days = daysUntil(d.expiry);
+        if (days <= 60) alerts.push({ level: days <= 14 ? 'critical' : 'warn', text: `${d.drug} expiring in ${days} days (${d.expiry})`});
+      });
+      // shipment delays
+      MOCK_SHIPMENTS.forEach(s=>{
+        if (s.delay > 0) alerts.push({ level: 'warn', text: `${s.id} delayed by ${s.delay} days`});
+      });
+
+      // render sorted by level
+      alerts.sort((a,b)=> (a.level === 'critical'? -1:1) - (b.level === 'critical'? -1:1));
+      alerts.forEach(a=>{
+        const color = a.level === 'critical' ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200';
+        const el = document.createElement('div');
+        el.className = `p-3 border-l-4 ${a.level === 'critical' ? 'border-red-500' : 'border-yellow-400'} rounded-md bg-white`;
+        el.innerHTML = `<div class="text-sm">${a.text}</div>`;
+        panel.appendChild(el);
+      });
+    }
+
+    /* Inventory table */
+    const inventoryBody = document.getElementById('inventoryBody');
+    const categoryFilter = document.getElementById('categoryFilter');
+    function populateCategories() {
+      const cats = [...new Set(MOCK_DRUGS.map(d=>d.category))].sort();
+      cats.forEach(c=>{
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        categoryFilter.appendChild(opt);
+      });
+    }
+
+    function renderInventoryTable(filterCategory = '') {
+      inventoryBody.innerHTML = '';
+      const rows = MOCK_DRUGS
+        .filter(d => !filterCategory || d.category === filterCategory)
+        .sort((a,b)=>b.qty - a.qty);
+      rows.forEach(d=>{
+        const days = daysUntil(d.expiry);
+        // color-coded expiry/low
+        let expiryBadge = `<span class="px-2 py-1 rounded-full text-xs ${days <= 14 ? 'bg-red-100 text-red-800' : days <=60 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}">${days}d</span>`;
+        let lowBadge = d.qty <= lowThreshold ? `<span class="ml-2 text-xs text-white bg-red-600 px-2 py-0.5 rounded">LOW</span>` : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="p-2"><div class="font-medium">${d.drug}</div><div class="text-xs text-slate-500">${d.category}</div></td>
+          <td class="p-2">${d.batch}</td>
+          <td class="p-2">${d.qty} ${lowBadge}</td>
+          <td class="p-2">${d.expiry} ${expiryBadge}</td>
+          <td class="p-2">${d.location}</td>
+          <td class="p-2"><button class="px-2 py-1 bg-primary text-white rounded text-sm" onclick="viewDetails('${d.batch}')">View</button></td>
+        `;
+        inventoryBody.appendChild(tr);
+      });
+    }
+
+    function viewDetails(batch) {
+      const d = MOCK_DRUGS.find(x=>x.batch===batch);
+      alert(`${d.drug}\nBatch: ${d.batch}\nQty: ${d.qty}\nExpiry: ${d.expiry}\nLocation: ${d.location}`);
+    }
+
+    categoryFilter.addEventListener('change', ()=> renderInventoryTable(categoryFilter.value));
+
+    /* CSV Export */
+    document.getElementById('exportCsv').addEventListener('click', ()=>{
+      const headers = ['drug','batch','qty','expiry','category','location'];
+      const csv = [headers.join(',')].concat(MOCK_DRUGS.map(d => headers.map(h => `"${String(d[h]).replace(/"/g,'""')}"`).join(','))).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'inventory_export.csv'; a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    /* Shipments timeline */
+    function renderTimeline() {
+      const el = document.getElementById('timelineList');
+      el.innerHTML = '';
+      const order = ['ordered','dispatched','in-transit','delivered'];
+      MOCK_SHIPMENTS.forEach(s=>{
+        const days = daysUntil(s.eta);
+        const statusColor = s.status === 'delivered' ? 'bg-green-50 border-green-300' : s.status === 'in-transit' ? 'bg-blue-50 border-blue-300' : s.delay > 0 ? 'bg-yellow-50 border-yellow-300' : 'bg-slate-50 border-slate-200';
+        const node = document.createElement('div');
+        node.className = `p-3 rounded-md ${statusColor}`;
+        node.innerHTML = `<div class="flex items-center justify-between">
+            <div><div class="font-semibold">${s.id} — ${s.origin} → ${s.dest}</div><div class="text-xs text-slate-500">${s.status} • ETA: ${s.eta} • ${days}d</div></div>
+            <div class="text-sm">${s.delay>0? '<span class="text-yellow-700">Delay: '+s.delay+'d</span>' : '<span class="text-green-700">On time</span>'}</div>
+          </div>`;
+        el.appendChild(node);
+      });
+    }
+
+    /* Shipments list */
+    function renderShipmentsList() {
+      const el = document.getElementById('shipmentsList');
+      el.innerHTML = '';
+      MOCK_SHIPMENTS.forEach(s=>{
+        const card = document.createElement('div');
+        card.className = 'p-3 rounded-md border';
+        card.innerHTML = `<div class="flex items-center justify-between">
+          <div><div class="font-medium">${s.id}</div><div class="text-xs text-slate-500">${s.origin} → ${s.dest}</div></div>
+          <div class="text-sm">${s.status}</div>
+        </div>`;
+        el.appendChild(card);
+      });
+    }
+
+    /* Suppliers */
+    function renderSuppliers() {
+      const el = document.getElementById('suppliersList');
+      const detail = document.getElementById('supplierDetail');
+      el.innerHTML = '';
+      MOCK_SUPPLIERS.forEach(s=>{
+        const li = document.createElement('li');
+        li.className = 'p-2 border rounded hover:bg-slate-50 cursor-pointer';
+        li.innerHTML = `<div class="font-medium">${s.name}</div><div class="text-xs text-slate-500">Reliability: ${s.reliability}%</div>`;
+        li.addEventListener('click', ()=> detail.innerHTML = `<div class="font-semibold">${s.name}</div><div class="text-sm">Reliability: ${s.reliability}%</div><div class="text-sm text-slate-500 mt-2">Avg lead time: ${(100-s.reliability)/5 + 2} days</div>`);
+        el.appendChild(li);
+      });
+    }
+
+    /* Analytics: usage + supplier reliability charts */
+    function initCharts() {
+      // Bar chart (top 10)
+      const labels = MOCK_DRUGS.slice().sort((a,b)=>b.qty-a.qty).slice(0,10).map(d => d.drug);
+      const data = MOCK_DRUGS.slice().sort((a,b)=>b.qty-a.qty).slice(0,10).map(d => d.qty);
+
+      const ctxBar = document.getElementById('barChart').getContext('2d');
+      new Chart(ctxBar, {
+        type: 'bar',
+        data: { labels, datasets: [{ label: 'Units', data, backgroundColor: data.map(v => v < lowThreshold ? 'rgba(239,68,68,0.8)' : 'rgba(14,165,164,0.9)') }] },
+        options: { responsive: true, plugins: { legend: { display: false } } }
+      });
+
+      // Supplier reliability doughnut
+      const sLabels = MOCK_SUPPLIERS.map(s=>s.name);
+      const sData = MOCK_SUPPLIERS.map(s=>s.reliability);
+      const ctxSup = document.getElementById('supplierChart').getContext('2d');
+      new Chart(ctxSup, {
+        type: 'doughnut',
+        data: { labels: sLabels, datasets: [{ data: sData, backgroundColor: ['#0ea5a4','#f59e0b','#ef4444','#60a5fa','#a78bfa'] }] },
+        options: { plugins: { legend: { position: 'bottom' } } }
+      });
+
+      // usage trend (line) mock
+      const months = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov'];
+      const usage = months.map((_,i) => Math.round(1000 + Math.random()*500 - i*20));
+      const ctxUsage = document.getElementById('usageChart').getContext('2d');
+      new Chart(ctxUsage, {
+        type: 'line',
+        data: { labels: months, datasets: [{ label: 'Usage', data: usage, borderColor: '#0ea5a4', backgroundColor: 'rgba(14,165,164,0.12)', tension: .3 }] },
+        options: { responsive: true, plugins: { legend: { display: false } } }
+      });
+
+      // reliability (bar)
+      const ctxRel = document.getElementById('reliabilityChart').getContext('2d');
+      new Chart(ctxRel, {
+        type: 'bar',
+        data: { labels: sLabels, datasets: [{ label: 'Reliability %', data: sData, backgroundColor: '#60a5fa' }] },
+        options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { max: 100 } } }
+      });
+    }
+
+    /* Map (Leaflet) */
+    let mainMap;
+    function initMap() {
+      mainMap = L.map('map', { center: [21.0,78.0], zoom: 5, preferCanvas:true });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '' }).addTo(mainMap);
+      MOCK_SHIPMENTS.forEach(s=>{
+        const marker = L.marker([s.lat, s.lon]).addTo(mainMap);
+        marker.bindPopup(`<strong>${s.id}</strong><br>${s.origin} → ${s.dest}<br>Status: ${s.status}<br>ETA: ${s.eta}`);
+      });
+    }
+
+    /* small map for supply page */
+    let smallMap;
+    function initSmallMap() {
+      smallMap = L.map('mapSmall', { center: [21.0,78.0], zoom: 5, preferCanvas:true });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '' }).addTo(smallMap);
+      MOCK_SHIPMENTS.forEach(s=>{
+        L.circleMarker([s.lat,s.lon], { radius: 8, color: s.status === 'delivered' ? '#10b981' : s.status === 'in-transit' ? '#60a5fa' : '#f59e0b' })
+          .addTo(smallMap).bindPopup(`${s.id} — ${s.status}`);
+      });
+    }
+
+    /* Heatmap grid */
+    function renderHeatmap() {
+      const grid = document.getElementById('heatmapGrid');
+      grid.innerHTML = '';
+      for (let r=0;r<8;r++){
+        const cell = document.createElement('div');
+        const intensity = Math.floor(Math.random()*100);
+        const bg = intensity > 70 ? 'bg-red-300' : intensity > 40 ? 'bg-yellow-200' : 'bg-green-200';
+        cell.className = `heat-cell ${bg}`;
+        cell.textContent = intensity + '%';
+        grid.appendChild(cell);
+      }
+    }
+
+    /* Alerts & compliance lists */
+    function renderCompliance() {
+      const expiryEl = document.getElementById('expiryList');
+      const tempEl = document.getElementById('tempList');
+      const compEl = document.getElementById('complianceList');
+      expiryEl.innerHTML = ''; tempEl.innerHTML = ''; compEl.innerHTML = '';
+
+      MOCK_DRUGS.forEach(d=>{
+        const days = daysUntil(d.expiry);
+        if (days <= 60) {
+          const li = document.createElement('li');
+          li.textContent = `${d.drug} (${d.batch}) expiring in ${days} days`;
+          expiryEl.appendChild(li);
+        }
+      });
+
+      // mock temp breaches
+      tempEl.innerHTML = '<li>Cold Storage — Vaccines: 1 breach detected (SHP-004)</li>';
+      compEl.innerHTML = '<li>Storage audit: PASS — 3 non-critical observations</li>';
+    }
+
+    /* Initial render */
+    function boot() {
+      populateCategories();
+      renderInventoryTable();
+      renderAlerts();
+      renderTimeline();
+      renderShipmentsList();
+      renderSuppliers();
+      initCharts();
+      initMap();
+      initSmallMap();
+      renderHeatmap();
+      renderCompliance();
+    }
+    boot();
+
+    /* Table sorting by clicking header (very small implementation) */
+    document.querySelectorAll('#inventoryTable thead th[data-key]').forEach(th=>{
+      th.addEventListener('click', ()=> {
+        const key = th.dataset.key;
+        MOCK_DRUGS.sort((a,b)=> {
+          if (key === 'qty') return b.qty - a.qty;
+          if (key === 'expiry') return new Date(a.expiry) - new Date(b.expiry);
+          return (''+a[key]).localeCompare(''+b[key]);
+        });
+        renderInventoryTable(categoryFilter.value);
+      });
+    });
+
+    /* Global search: filters inventory and highlights */
+    document.getElementById('globalSearch').addEventListener('input', (e)=>{
+      const q = e.target.value.trim().toLowerCase();
+      if (!q) { renderInventoryTable(categoryFilter.value); return; }
+      inventoryBody.innerHTML = '';
+      MOCK_DRUGS.filter(d => [d.drug,d.batch,d.category,d.location].join(' ').toLowerCase().includes(q))
+        .forEach(d=>{
+          const days = daysUntil(d.expiry);
+          const expiryBadge = `<span class="px-2 py-1 rounded-full text-xs ${days <= 14 ? 'bg-red-100 text-red-800' : days <=60 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}">${days}d</span>`;
+          const lowBadge = d.qty <= lowThreshold ? `<span class="ml-2 text-xs text-white bg-red-600 px-2 py-0.5 rounded">LOW</span>` : '';
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td class="p-2"><div class="font-medium">${d.drug}</div><div class="text-xs text-slate-500">${d.category}</div></td>
+            <td class="p-2">${d.batch}</td>
+            <td class="p-2">${d.qty} ${lowBadge}</td>
+            <td class="p-2">${d.expiry} ${expiryBadge}</td>
+            <td class="p-2">${d.location}</td>
+            <td class="p-2"><button class="px-2 py-1 bg-primary text-white rounded text-sm" onclick="viewDetails('${d.batch}')">View</button></td>
+          `;
+          inventoryBody.appendChild(tr);
+        });
+    });
+
+    /* Settings: threshold change */
+    document.getElementById('thresholdInput').addEventListener('change', (e)=>{
+      lowThreshold = Number(e.target.value) || LOW_THRESHOLD_DEFAULT;
+      renderInventoryTable(categoryFilter.value);
+      renderAlerts();
+      // update charts by re-initializing (simple)
+      initCharts();
+    });
+
+    // small helper for buttons that call functions in this scope
+    window.viewDetails = viewDetails;
+  </script>
+</body>
+</html>
